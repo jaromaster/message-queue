@@ -1,5 +1,12 @@
+use server::server::new_server;
+
 mod queue;
+mod server;
+
 
 fn main() {
-    println!("Starting message-queue server...");
+ 
+
+    let mut webserver = new_server();
+    webserver.start();
 }
