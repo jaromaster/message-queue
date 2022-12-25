@@ -12,14 +12,7 @@ pub mod server {
     pub fn new_server() -> Server {
 
         let port = 8080 as i32;
-        let mut queue = new_queue();
-
-        // TESTING test-data
-        queue.add_message("this is a test message".to_string());
-        queue.add_message("{\"message\": \"this is a json message\"}".to_string());
-        queue.add_message("some other message".to_string());
-
-
+        let queue = new_queue();
         let server = Server{port, queue};
         return server;
     }
@@ -42,11 +35,9 @@ pub mod server {
         fn handle_connection(&mut self, mut stream: TcpStream) {
             // read lines of request header
             let reader = BufReader::new(&mut stream);
-            let header = parse_header(reader);
+            let (header, body) = parse_request(reader);
 
-            // TODO read lines of request body
-
-            // parse first line to get METHOD and PATH
+            // parse first line of header to get METHOD and PATH
             let first_line = &header[0];
             let first_line_parsed = first_line.split(" ").collect::<Vec<&str>>();
             let method = first_line_parsed[0];
@@ -64,10 +55,14 @@ pub mod server {
                 return;
             }
 
-            // TODO handle POST /add/message
+            // handle POST /add/message
             else if method == "POST" && path == "/add/message" {
 
-                println!("POST request to {}", path);
+                let message = body.join("\n");
+                self.queue.add_message(message);
+
+                println!("POST request to {}, body: {:?}", path, body);
+                
                 send_ok(&mut stream).unwrap();
                 return;
             }
@@ -79,15 +74,33 @@ pub mod server {
         }
     }
 
-    /// read from buffered reader and return header as Vec
-    fn parse_header(reader: BufReader<&mut TcpStream>) -> Vec<String> {
-        let request_header: Vec<_> = reader
-            .lines()
-            .map(|result| result.unwrap())
-            .take_while(|line| !line.is_empty()) // break at empty line (omits request body)
-            .collect();
+    /// read from buffered reader and return (header, body)
+    fn parse_request(mut reader: BufReader<&mut TcpStream>) -> (Vec<String>, Vec<String>) {
 
-        return request_header;
+        let data = reader.fill_buf().unwrap().to_vec();
+        reader.consume(data.len());
+        let data_string = String::from_utf8(data).unwrap();
+
+        let mut header: Vec<String> = Vec::new();
+        let mut body: Vec<String> = Vec::new();
+
+        let mut is_header = true;
+        for line in data_string.split("\n") {
+
+            if line == "\r" {
+                if is_header {
+                    is_header = false;
+                    continue;
+                }
+            }
+
+            if is_header {
+                header.push(line.to_string());
+            } else {
+                body.push(line.to_string());
+            }
+        }
+        return (header, body);
     }
 
     /// send 200 using stream
