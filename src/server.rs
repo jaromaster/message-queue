@@ -1,19 +1,19 @@
 pub mod server {
-    use std::{net::{TcpListener, TcpStream}, io::{BufReader, BufRead, Write, Error}};
+    use std::{net::{TcpListener, TcpStream}, io::{BufReader, BufRead, Write, Error}, collections::HashMap};
     use crate::queue::queue::{Queue, new_queue};
 
     /// Server handles connections and stores all messages in a Queue
     pub struct Server {
         port: i32,
-        queue: Queue
+        queues: HashMap<String, Queue>,
     }
 
     /// create a new server
     pub fn new_server() -> Server {
 
         let port = 8080 as i32;
-        let queue = new_queue();
-        let server = Server{port, queue};
+        let queues: HashMap<String, Queue> = HashMap::new();
+        let server = Server{port, queues};
         return server;
     }
 
@@ -42,32 +42,66 @@ pub mod server {
             let first_line_parsed = first_line.split(" ").collect::<Vec<&str>>();
             let method = first_line_parsed[0];
             let path = first_line_parsed[1];
+            
 
+            // handle POST /new/:queuename
+            if method == "POST" && path.starts_with("/new/") {
+                let queue_name = path.replace("/new/", "");
+                
+                // queue already exists
+                if self.queues.contains_key(&queue_name) {
+                    send_bad_request(&mut stream).unwrap();
+                    send_body(&mut stream, format!("Queue '{}' already exists", queue_name)).unwrap();
+                    return;
+                }
 
-            // handle GET /get/message
-            if method == "GET" && path == "/get/message" {
+                println!("creating new queue called: {}", queue_name.clone());
 
-                let message = self.queue.retrieve_message();
-                println!("GET request to {}, retrieving message '{}'", path, message);
+                self.queues.insert(queue_name, new_queue()); 
 
                 send_ok(&mut stream).unwrap();
-                send_body(&mut stream, message).unwrap();
+                return;
+            } 
+
+            // handle GET /get/:queuename
+            else if method == "GET" && path.starts_with("/get/") {
+                let queue_name = path.replace("/get/", "");
+
+                // queue does not exist
+                if self.queues.contains_key(&queue_name) == false {
+                    send_not_found(&mut stream).unwrap();
+                    return;
+                }
+                
+                let message = self.queues.get_mut(&queue_name).unwrap().retrieve_message();
+                println!("GET request to queue: {}, retrieving message '{}'", queue_name, message);
+
+                send_ok(&mut stream).unwrap();
+                send_body(&mut stream, message.to_string()).unwrap();
                 return;
             }
 
-            // handle POST /add/message
-            else if method == "POST" && path == "/add/message" {
+            // handle POST /add/:queuename
+            else if method == "POST" && path.starts_with("/add/") {
+                let queue_name = path.replace("/add/", "");
+                
+                // queue does not exist
+                if self.queues.contains_key(&queue_name) == false {
+                    send_not_found(&mut stream).unwrap();
+                    return;
+                }
 
                 let message = body.join("\n");
-                self.queue.add_message(message);
+                self.queues.get_mut(&queue_name).unwrap().add_message(message);
 
-                println!("POST request to {}, body: {:?}", path, body);
+                println!("POST request to queue: {}, body: {:?}", queue_name, body);
                 
                 send_ok(&mut stream).unwrap();
                 return;
             }
 
             // invalid method
+            println!("{} request to {} (invalid)", method, path);
             send_not_found(&mut stream).unwrap();
 
 
@@ -106,6 +140,13 @@ pub mod server {
     /// send 200 using stream
     fn send_ok(stream: &mut TcpStream) -> Result<(), Error> {
         let http_response = "HTTP/1.1 200 OK\r\n\r\n";
+        stream.write_all(http_response.as_bytes())?;
+        Ok(())
+    }
+
+    /// send 400 using stream
+    fn send_bad_request(stream: &mut TcpStream) -> Result<(), Error> {
+        let http_response = "HTTP/1.1 400 Bad Request\r\n\r\n";
         stream.write_all(http_response.as_bytes())?;
         Ok(())
     }
