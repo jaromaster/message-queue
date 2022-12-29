@@ -61,7 +61,23 @@ pub mod server {
 
                 send_ok(&mut stream).unwrap();
                 return;
-            } 
+            }
+
+            // handle DELETE /delete/:queuename
+            else if method == "DELETE" && path.starts_with("/delete/") {
+                let queue_name = path.replace("/delete/", "");
+
+                let result = self.queues.remove(&queue_name);
+                if result.is_some() { // ok
+                    send_ok(&mut stream).unwrap();
+                    return;
+                }
+
+                // could not remove queue (does not exist)
+                send_bad_request(&mut stream).unwrap();
+                send_body(&mut stream, format!("Queue '{}' cannot be removed as it does not exist", queue_name)).unwrap();
+                return;
+            }
 
             // handle GET /get/:queuename
             else if method == "GET" && path.starts_with("/get/") {
