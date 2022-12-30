@@ -1,12 +1,12 @@
 # Message Queue
 
-## blazingly fast message queue server written in Rust 
+## blazingly fast message queue server written in Rust :rocket:
 
 ## Why
-- fast and lightweight
-- concurrency using threadpools (only dependency)
-- no configuration needed
-- no special protocol needed (only simple REST calls)
+- fast and lightweight :rocket:
+- concurrency using threadpools (only dependency) :rocket:
+- no configuration needed :pray: 
+- no special protocol needed (only simple REST calls) :sunglasses:
 
 ## Install
 - clone repo
