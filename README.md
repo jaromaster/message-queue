@@ -13,6 +13,10 @@
 - build using cargo
 - run ./message-queue
 
+## Planned
+- [ ] auth using JWT
+- [ ] https
+
 ## Usage
 ### NOTE: replace 'queue-name' with the actual name of the message queue
 ### NOTE: you can create these REST calls using any tool/programming language you want
