@@ -1,18 +1,18 @@
 pub mod server {
-    use std::{net::{TcpListener, TcpStream}, io::{BufReader, BufRead, Write, Error}, collections::HashMap};
+    use std::{net::{TcpListener, TcpStream}, io::{BufReader, BufRead, Write, Error}, collections::HashMap, sync::{Mutex, Arc}};
     use crate::queue::queue::{Queue, new_queue};
 
     /// Server handles connections and stores all messages in a Queue
     pub struct Server {
         port: i32,
-        queues: HashMap<String, Queue>,
+        queues: Arc<Mutex<HashMap<String, Queue>>>
     }
 
     /// create a new server
     pub fn new_server() -> Server {
 
         let port = 8080 as i32;
-        let queues: HashMap<String, Queue> = HashMap::new();
+        let queues = Arc::new(Mutex::new(HashMap::new()));
         let server = Server{port, queues};
         return server;
     }
@@ -20,109 +20,116 @@ pub mod server {
 
     impl Server {
         /// start the server
-        pub fn start(&mut self) {
+        pub fn start(self) {
             println!("Starting message-queue server...\n");
+
+            // thread pool
+            let n_workers = 64;
+            let pool = threadpool::ThreadPool::new(n_workers);
 
             // handle tcp connections
             let conn_listener = TcpListener::bind(format!("0.0.0.0:{}", self.port)).unwrap();
             for stream in conn_listener.incoming() {
                 let stream = stream.unwrap();
-                self.handle_connection(stream);
+                let queue_pointer = Arc::clone(&self.queues);
+
+                pool.execute(move|| {
+                    handle_connection(&mut queue_pointer.lock().unwrap(), stream);
+                });
             }
         }
+    }    
 
-        /// handle a single connection
-        fn handle_connection(&mut self, mut stream: TcpStream) {
-            // read lines of request header
-            let reader = BufReader::new(&mut stream);
-            let (header, body) = parse_request(reader);
+    /// handle a single connection
+    fn handle_connection(queues: &mut HashMap<String, Queue>, mut stream: TcpStream) {
+        // read lines of request header
+        let reader = BufReader::new(&mut stream);
+        let (header, body) = parse_request(reader);
 
-            // parse first line of header to get METHOD and PATH
-            let first_line = &header[0];
-            let first_line_parsed = first_line.split(" ").collect::<Vec<&str>>();
-            let method = first_line_parsed[0];
-            let path = first_line_parsed[1];
+        // parse first line of header to get METHOD and PATH
+        let first_line = &header[0];
+        let first_line_parsed = first_line.split(" ").collect::<Vec<&str>>();
+        let method = first_line_parsed[0];
+        let path = first_line_parsed[1];
+        
+
+        // handle POST /new/:queuename
+        if method == "POST" && path.starts_with("/new/") {
+            let queue_name = path.replace("/new/", "");
             
-
-            // handle POST /new/:queuename
-            if method == "POST" && path.starts_with("/new/") {
-                let queue_name = path.replace("/new/", "");
-                
-                // queue already exists
-                if self.queues.contains_key(&queue_name) {
-                    send_bad_request(&mut stream).unwrap();
-                    send_body(&mut stream, format!("Queue '{}' already exists", queue_name)).unwrap();
-                    return;
-                }
-
-                println!("creating new queue called: {}", queue_name.clone());
-
-                self.queues.insert(queue_name, new_queue()); 
-
-                send_ok(&mut stream).unwrap();
-                return;
-            }
-
-            // handle DELETE /delete/:queuename
-            else if method == "DELETE" && path.starts_with("/delete/") {
-                let queue_name = path.replace("/delete/", "");
-
-                let result = self.queues.remove(&queue_name);
-                if result.is_some() { // ok
-                    send_ok(&mut stream).unwrap();
-                    return;
-                }
-
-                // could not remove queue (does not exist)
+            // queue already exists
+            if queues.contains_key(&queue_name) {
                 send_bad_request(&mut stream).unwrap();
-                send_body(&mut stream, format!("Queue '{}' cannot be removed as it does not exist", queue_name)).unwrap();
+                send_body(&mut stream, format!("Queue '{}' already exists", queue_name)).unwrap();
                 return;
             }
 
-            // handle GET /get/:queuename
-            else if method == "GET" && path.starts_with("/get/") {
-                let queue_name = path.replace("/get/", "");
+            println!("creating new queue called: {}", queue_name.clone());
 
-                // queue does not exist
-                if self.queues.contains_key(&queue_name) == false {
-                    send_not_found(&mut stream).unwrap();
-                    return;
-                }
-                
-                let message = self.queues.get_mut(&queue_name).unwrap().retrieve_message();
-                println!("GET request to queue: {}, retrieving message '{}'", queue_name, message);
+            queues.insert(queue_name, new_queue()); 
 
-                send_ok(&mut stream).unwrap();
-                send_body(&mut stream, message.to_string()).unwrap();
-                return;
-            }
-
-            // handle POST /add/:queuename
-            else if method == "POST" && path.starts_with("/add/") {
-                let queue_name = path.replace("/add/", "");
-                
-                // queue does not exist
-                if self.queues.contains_key(&queue_name) == false {
-                    send_not_found(&mut stream).unwrap();
-                    return;
-                }
-
-                let message = body.join("\n");
-                self.queues.get_mut(&queue_name).unwrap().add_message(message);
-
-                println!("POST request to queue: {}, body: {:?}", queue_name, body);
-                
-                send_ok(&mut stream).unwrap();
-                return;
-            }
-
-            // invalid method
-            println!("{} request to {} (invalid)", method, path);
-            send_not_found(&mut stream).unwrap();
-
-
+            send_ok(&mut stream).unwrap();
+            return;
         }
+
+        // handle DELETE /delete/:queuename
+        else if method == "DELETE" && path.starts_with("/delete/") {
+            let queue_name = path.replace("/delete/", "");
+
+            let result = queues.remove(&queue_name);
+            if result.is_some() { // ok
+                send_ok(&mut stream).unwrap();
+                return;
+            }
+
+            // could not remove queue (does not exist)
+            send_bad_request(&mut stream).unwrap();
+            send_body(&mut stream, format!("Queue '{}' cannot be removed as it does not exist", queue_name)).unwrap();
+            return;
+        }
+
+        // handle GET /get/:queuename
+        else if method == "GET" && path.starts_with("/get/") {
+            let queue_name = path.replace("/get/", "");
+
+            // queue does not exist
+            if queues.contains_key(&queue_name) == false {
+                send_not_found(&mut stream).unwrap();
+                return;
+            }
+            
+            let message = queues.get_mut(&queue_name).unwrap().retrieve_message();
+            println!("GET request to queue: {}, retrieving message '{}'", queue_name, message);
+
+            send_ok(&mut stream).unwrap();
+            send_body(&mut stream, message.to_string()).unwrap();
+            return;
+        }
+
+        // handle POST /add/:queuename
+        else if method == "POST" && path.starts_with("/add/") {
+            let queue_name = path.replace("/add/", "");
+            
+            // queue does not exist
+            if queues.contains_key(&queue_name) == false {
+                send_not_found(&mut stream).unwrap();
+                return;
+            }
+
+            let message = body.join("\n");
+            queues.get_mut(&queue_name).unwrap().add_message(message);
+
+            println!("POST request to queue: {}, body: {:?}", queue_name, body);
+            
+            send_ok(&mut stream).unwrap();
+            return;
+        }
+
+        // invalid method
+        println!("{} request to {} (invalid)", method, path);
+        send_not_found(&mut stream).unwrap();
     }
+
 
     /// read from buffered reader and return (header, body)
     fn parse_request(mut reader: BufReader<&mut TcpStream>) -> (Vec<String>, Vec<String>) {

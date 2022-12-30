@@ -5,8 +5,7 @@ mod server;
 
 
 fn main() {
- 
 
-    let mut webserver = new_server();
+    let webserver = new_server();
     webserver.start();
 }
